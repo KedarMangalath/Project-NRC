@@ -1,0 +1,170 @@
+import pandas as pd
+import numpy as np
+import re
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, mean_squared_error, r2_score, mean_absolute_error
+from sklearn.preprocessing import LabelEncoder
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.layers import Input, Embedding, LSTM, Dense, Dropout, Bidirectional, Concatenate
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+import nltk
+from nltk.tokenize import word_tokenize
+from scipy.stats import pearsonr
+
+# Download necessary NLTK resources
+nltk.download('punkt')
+
+# Define a function to clean and preprocess the text
+def preprocess_text(text):
+    # Convert to lowercase
+    text = text.lower()
+    # Remove URLs, mentions, and hashtags
+    text = re.sub(r'http\S+|www\S+|https\S+|@\w+|#', '', text)
+    # Remove punctuation
+    text = re.sub(r'[^\w\s]', '', text)
+    # Tokenize
+    tokens = word_tokenize(text)
+    return ' '.join(tokens)
+
+
+# Function to calculate NRC sentiment scores
+def calculate_emotion_scores(text, nrc_lexicon):
+    tokens = word_tokenize(text.lower())
+    emotion_scores = {emotion: 0 for emotion in nrc_lexicon['word'].keys()}
+    for token in tokens:
+        if token in nrc_lexicon:
+            for emotion in nrc_lexicon[token]:
+                emotion_scores[emotion] += nrc_lexicon[token][emotion]
+    return np.array(list(emotion_scores.values()))
+
+nrc_lexicon = {}
+with open(r"C:\Users\manga\OneDrive\Desktop\NRC-Emotion-Lexicon\NRC-Emotion-Lexicon-Wordlevel-v0.92.txt", 'r') as file:
+    reader = csv.reader(file, delimiter='\t')
+    for row in reader:
+        word, emotion, score = row
+        if word not in nrc_lexicon:
+            nrc_lexicon[word] = {}
+        nrc_lexicon[word][emotion] = int(score)
+
+
+# Load your dataset (assuming the format is ID, Tweet, Emotion, Intensity)
+def load_data(file_path, nrc_lexicon):
+    data = pd.read_csv(file_path, sep='\t', header=None)
+    data.columns = ['ID', 'Tweet', 'Emotion', 'Intensity']
+    data['Processed_Tweet'] = data['Tweet'].apply(preprocess_text)
+    data['Emotion_Scores'] = data['Processed_Tweet'].apply(lambda x: calculate_emotion_scores(x, nrc_lexicon))
+    return data
+
+# Load and preprocess the data
+anger_data = load_data(r"C:\Users\manga\OneDrive\Desktop\Project\Train\anger_training.txt", nrc_lexicon)
+fear_data = load_data(r"C:\Users\manga\OneDrive\Desktop\Project\Train\fear_training.txt", nrc_lexicon)
+joy_data = load_data(r"C:\Users\manga\OneDrive\Desktop\Project\Train\joy_training.txt", nrc_lexicon)
+sadness_data = load_data(r"C:\Users\manga\OneDrive\Desktop\Project\Train\sadness_training.txt", nrc_lexicon)
+
+# Combine the data from all emotions
+combined_data = pd.concat([anger_data,fear_data, joy_data, sadness_data])  # Combine all the loaded data frames
+combined_data = combined_data.sample(frac=1, random_state=42).reset_index(drop=True)  # Shuffle the combined data
+
+# Tokenization and sequence padding
+tokenizer = Tokenizer(num_words=10000)
+tokenizer.fit_on_texts(combined_data['Processed_Tweet'])
+sequences = tokenizer.texts_to_sequences(combined_data['Processed_Tweet'])
+padded_sequences = pad_sequences(sequences, maxlen=100)
+
+# Encode emotion labels
+label_encoder = LabelEncoder()
+encoded_labels = label_encoder.fit_transform(combined_data['Emotion'])
+categorical_labels = to_categorical(encoded_labels)
+
+# ... [previous code for preprocessing and preparing your data] ...
+
+# Keep a copy of the indices of the combined_data before splitting
+indices = combined_data.index
+
+# Split the data into training and testing sets for both models
+# Make sure to also split the indices to keep track of which rows go into the test set
+X_train, X_test, y_train, y_test, indices_train, indices_test = train_test_split(
+    padded_sequences, categorical_labels, indices, test_size=0.2, random_state=42
+)
+
+# ... [insert the rest of your model training and evaluation code here] ...
+
+# Split the data into training and testing sets for both models
+X_train, X_test, y_train, y_test = train_test_split(padded_sequences, categorical_labels, test_size=0.2, random_state=42)
+emotion_scores_train, emotion_scores_test = train_test_split(combined_data['Emotion_Scores'].tolist(), test_size=0.2, random_state=42)
+intensity_train, intensity_test = train_test_split(combined_data['Intensity'], test_size=0.2, random_state=42)
+
+# Emotion Classification Model
+# Define the architecture
+input_layer = Input(shape=(100,))
+embedding_layer = Embedding(10000, 64)(input_layer)
+lstm_layer = Bidirectional(LSTM(64))(embedding_layer)
+output_layer = Dense(categorical_labels.shape[1], activation='softmax')(lstm_layer)
+classification_model = Model(input_layer, output_layer)
+
+# Compile the model
+classification_model.compile(loss='categorical_crossentropy', optimizer=Adam(), metrics=['accuracy'])
+
+# Train the model
+classification_model.fit(X_train, y_train, epochs=10, validation_split=0.1)
+
+# Evaluate the classification model
+y_pred_class = classification_model.predict(X_test)
+y_pred_labels = np.argmax(y_pred_class, axis=1)
+y_true_labels = np.argmax(y_test, axis=1)
+print(classification_report(y_true_labels, y_pred_labels, target_names=label_encoder.classes_))
+
+
+
+# Emotion Intensity Regression Model
+# Define the architecture
+regression_input_layer = Input(shape=(len(emotion_scores_train[0]),))
+regression_dense_layer = Dense(64, activation='relu')(regression_input_layer)
+regression_output_layer = Dense(1)(regression_dense_layer)
+regression_model = Model(regression_input_layer, regression_output_layer)
+
+# Compile the model
+regression_model.compile(loss='mean_squared_error', optimizer=Adam(), metrics=['mean_squared_error'])
+
+# Train the regression model
+regression_model.fit(np.array(emotion_scores_train), intensity_train, epochs=10, validation_split=0.1)
+
+# Predict the emotion and its intensity on the test set
+y_pred_class = classification_model.predict(X_test)
+y_pred_labels = np.argmax(y_pred_class, axis=1)
+predicted_intensity = regression_model.predict(np.array(emotion_scores_test)).flatten()
+
+# Map the predicted emotion labels back to the original string labels
+predicted_emotions = label_encoder.inverse_transform(y_pred_labels)
+
+# Combine the original tweets with the actual and predicted intensities for display
+results = pd.DataFrame({
+    'Original Tweet': combined_data.loc[indices_test, 'Tweet'].values,
+    'Actual Emotion': combined_data.loc[indices_test, 'Emotion'].values,
+    'Predicted Emotion': predicted_emotions,
+    'Actual Intensity': combined_data.loc[indices_test, 'Intensity'].values,
+    'Predicted Intensity': predicted_intensity
+})
+
+# Display the results
+print(results.head(10))
+
+# Evaluate the regression model
+predicted_intensity = regression_model.predict(np.array(emotion_scores_test))
+mse = mean_squared_error(intensity_test, predicted_intensity)
+r2 = r2_score(intensity_test, predicted_intensity)
+mae = mean_absolute_error(intensity_test, predicted_intensity)
+pearson_corr, _ = pearsonr(intensity_test, predicted_intensity.flatten())
+
+print(f'MSE: {mse}')
+print(f'R2: {r2}')
+print(f'MAE: {mae}')
+print(f'Pearson Correlation: {pearson_corr}')
+
+
+# Summarize the models
+classification_model.summary()
+regression_model.summary()
