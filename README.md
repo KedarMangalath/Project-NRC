@@ -35,3 +35,6 @@ This script describes a two-part emotion analysis system using a machine learnin
 
 ### Summary:
 This system uses a lexicon-based approach to inform a machine learning model, aiming to take advantage of the strengths of both methods. The classification model categorizes emotions, while the regression model predicts how strongly the emotion is expressed. The use of a Bidirectional LSTM enables the model to understand the context better, which is crucial for sentiment analysis.
+
+
+Edit file paths according to your requirements.
